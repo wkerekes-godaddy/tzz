@@ -7,8 +7,15 @@
 #
 # All settings are optional. Omitted values use the defaults shown below.
 
+# Primary time zone — appears first in the list.
+# When set, work hours are anchored to this zone: the green highlight
+# forms one solid block across all rows instead of shifting per zone.
+# Must match a zone name from the list below (case-insensitive).
+# primary: Arizona
+
 # Work hours (highlighted green in the bar graph)
 # Format: [start, end] in 24-hour time
+# Anchored to the primary zone when one is set, otherwise per-zone.
 work_hours: [9, 17]
 
 # Night hours (dimmed in the bar graph)

@@ -18,6 +18,7 @@ type zoneConfig struct {
 }
 
 type config struct {
+	Primary    string       `yaml:"primary"`
 	WorkHours  [2]int       `yaml:"work_hours"`
 	NightHours [2]int       `yaml:"night_hours"`
 	Use24h     bool         `yaml:"use_24h"`
@@ -86,29 +87,46 @@ type zone struct {
 	offset   int
 }
 
-func loadZones(zoneConfigs []zoneConfig) []zone {
+func loadZones(cfg config) ([]zone, int, bool) {
 	var zones []zone
-	for _, zc := range zoneConfigs {
+	var primary *zone
+	primaryOffset := 0
+	hasPrimary := cfg.Primary != ""
+
+	for _, zc := range cfg.Zones {
 		loc, err := time.LoadLocation(zc.TZ)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: unknown timezone %q, skipping\n", zc.TZ)
 			continue
 		}
 		_, offset := time.Now().In(loc).Zone()
-		zones = append(zones, zone{name: zc.Name, location: loc, offset: offset / 3600})
+		z := zone{name: zc.Name, location: loc, offset: offset / 3600}
+		if hasPrimary && strings.EqualFold(zc.Name, cfg.Primary) {
+			primary = &z
+			primaryOffset = z.offset
+		} else {
+			zones = append(zones, z)
+		}
 	}
-	return zones
+
+	if primary != nil {
+		zones = append([]zone{*primary}, zones...)
+	}
+
+	return zones, primaryOffset, hasPrimary
 }
 
 type tickMsg time.Time
 
 type model struct {
-	zones      []zone
-	cfg        config
-	width      int
-	height     int
-	now        time.Time
-	cursorHour int
+	zones         []zone
+	cfg           config
+	primaryOffset int // UTC offset of the primary zone (for work-hour anchoring)
+	hasPrimary    bool
+	width         int
+	height        int
+	now           time.Time
+	cursorHour    int
 }
 
 func tickEvery() tea.Cmd {
@@ -152,8 +170,9 @@ func hourInZone(utcHour, offsetHours int) int {
 	return h
 }
 
-func (m model) isWorkHours(hour int) bool {
-	return hour >= m.cfg.WorkHours[0] && hour <= m.cfg.WorkHours[1]
+func (m model) isWorkHoursUTC(utcHour int) bool {
+	primaryLocal := hourInZone(utcHour, m.primaryOffset)
+	return primaryLocal >= m.cfg.WorkHours[0] && primaryLocal <= m.cfg.WorkHours[1]
 }
 
 func (m model) isNight(hour int) bool {
@@ -230,6 +249,11 @@ func (m model) View() string {
 			style = style.Foreground(cursorFg).Background(cursorBg).Bold(true)
 		} else if utcH == nowUTCHour {
 			style = style.Foreground(nowMarker).Bold(true)
+			if m.isWorkHoursUTC(utcH) {
+				style = style.Background(workBg)
+			}
+		} else if m.isWorkHoursUTC(utcH) {
+			style = style.Foreground(lipgloss.Color("#AAAAAA")).Background(workBg)
 		} else {
 			style = style.Foreground(dimFg)
 		}
@@ -263,12 +287,12 @@ func (m model) View() string {
 				style = style.Foreground(nowMarker).Bold(true)
 				if m.isNight(localH) {
 					style = style.Background(nightBg)
-				} else if m.isWorkHours(localH) {
+				} else if m.isWorkHoursUTC(utcH) {
 					style = style.Background(workBg)
 				}
 			} else if m.isNight(localH) {
 				style = style.Foreground(dimFg).Background(nightBg)
-			} else if m.isWorkHours(localH) {
+			} else if m.isWorkHoursUTC(utcH) {
 				style = style.Foreground(brightFg).Background(workBg)
 			} else {
 				style = style.Foreground(lipgloss.Color("#AAAAAA"))
@@ -310,7 +334,7 @@ func (m model) View() string {
 		}
 
 		indicator := " "
-		if m.isWorkHours(localH) {
+		if m.isWorkHoursUTC(m.cursorHour) {
 			indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#96CEB4")).Render("●")
 		} else if m.isNight(localH) {
 			indicator = lipgloss.NewStyle().Foreground(dimFg).Render("◑")
@@ -330,8 +354,13 @@ func (m model) View() string {
 	b.WriteString(nowStr + "\n\n")
 
 	legend := lipgloss.NewStyle().Foreground(helpColor)
-	b.WriteString(legend.Render(fmt.Sprintf("  ● work hours (%d-%d)   ◑ night (%d:00-%d:00)",
-		m.cfg.WorkHours[0], m.cfg.WorkHours[1],
+	workLabel := fmt.Sprintf("● work hours (%d-%d", m.cfg.WorkHours[0], m.cfg.WorkHours[1])
+	if m.hasPrimary && len(m.zones) > 0 {
+		workLabel += " " + m.zones[0].name
+	}
+	workLabel += ")"
+	b.WriteString(legend.Render(fmt.Sprintf("  %s   ◑ night (%d:00-%d:00)",
+		workLabel,
 		m.cfg.NightHours[0], m.cfg.NightHours[1])) + "\n")
 
 	help := lipgloss.NewStyle().Foreground(helpColor).Italic(true)
@@ -342,14 +371,16 @@ func (m model) View() string {
 
 func main() {
 	cfg := loadConfig()
-	zones := loadZones(cfg.Zones)
+	zones, primaryOffset, hasPrimary := loadZones(cfg)
 
 	now := time.Now()
 	m := model{
-		zones:      zones,
-		cfg:        cfg,
-		now:        now,
-		cursorHour: now.UTC().Hour(),
+		zones:         zones,
+		cfg:           cfg,
+		primaryOffset: primaryOffset,
+		hasPrimary:    hasPrimary,
+		now:           now,
+		cursorHour:    now.UTC().Hour(),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())

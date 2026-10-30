@@ -8,6 +8,7 @@ An interactive terminal tool for comparing times across zones. Slide through the
 
 - **Slide-rule interface** — horizontal bar graph of hours per timezone, navigate with arrow keys
 - **Visual indicators** — work hours (green), nighttime (dim blue), current time (teal)
+- **Primary zone** — pin your home zone to the top; work hours anchor to it as one solid block across all rows
 - **Optional config file** — customize zones, work/night hours, and display format
 - **Zero dependencies** — single static binary, nothing to install
 
@@ -53,6 +54,9 @@ TZZ works out of the box with no config. To customize, create a YAML file at:
 - `~/.tzz.yaml` (fallback)
 
 ```yaml
+# Pin your zone to the top — work hours anchor to it
+primary: Arizona
+
 # Work hours highlighted green (24h format)
 work_hours: [9, 17]
 
