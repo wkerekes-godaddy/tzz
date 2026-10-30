@@ -13,9 +13,15 @@
 # Must match a zone name from the list below (case-insensitive).
 # primary: Arizona
 
+# Show/hide work hours and night hours highlighting
+# Both default to true
+show_work_hours: true
+show_night: true
+
 # Work hours (highlighted green in the bar graph)
 # Format: [start, end] in 24-hour time
 # Anchored to the primary zone when one is set, otherwise per-zone.
+# Work hours override night hours when both overlap.
 work_hours: [9, 17]
 
 # Night hours (dimmed in the bar graph)

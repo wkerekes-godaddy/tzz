@@ -18,18 +18,24 @@ type zoneConfig struct {
 }
 
 type config struct {
-	Primary    string       `yaml:"primary"`
-	WorkHours  [2]int       `yaml:"work_hours"`
-	NightHours [2]int       `yaml:"night_hours"`
-	Use24h     bool         `yaml:"use_24h"`
-	Zones      []zoneConfig `yaml:"zones"`
+	Primary       string       `yaml:"primary"`
+	WorkHours     [2]int       `yaml:"work_hours"`
+	NightHours    [2]int       `yaml:"night_hours"`
+	ShowWorkHours *bool        `yaml:"show_work_hours"`
+	ShowNight     *bool        `yaml:"show_night"`
+	Use24h        bool         `yaml:"use_24h"`
+	Zones         []zoneConfig `yaml:"zones"`
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 func defaultConfig() config {
 	return config{
-		WorkHours:  [2]int{9, 17},
-		NightHours: [2]int{22, 6},
-		Use24h:     false,
+		WorkHours:     [2]int{9, 17},
+		NightHours:    [2]int{22, 6},
+		ShowWorkHours: boolPtr(true),
+		ShowNight:     boolPtr(true),
+		Use24h:        false,
 		Zones: []zoneConfig{
 			{Name: "UTC", TZ: "UTC"},
 			{Name: "Eastern", TZ: "America/New_York"},
@@ -74,6 +80,12 @@ func loadConfig() config {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to parse %s: %v\n", path, err)
 			return defaultConfig()
+		}
+		if cfg.ShowWorkHours == nil {
+			cfg.ShowWorkHours = boolPtr(true)
+		}
+		if cfg.ShowNight == nil {
+			cfg.ShowNight = boolPtr(true)
 		}
 		return cfg
 	}
@@ -171,11 +183,17 @@ func hourInZone(utcHour, offsetHours int) int {
 }
 
 func (m model) isWorkHoursUTC(utcHour int) bool {
+	if !*m.cfg.ShowWorkHours {
+		return false
+	}
 	primaryLocal := hourInZone(utcHour, m.primaryOffset)
 	return primaryLocal >= m.cfg.WorkHours[0] && primaryLocal <= m.cfg.WorkHours[1]
 }
 
 func (m model) isNight(hour int) bool {
+	if !*m.cfg.ShowNight {
+		return false
+	}
 	start := m.cfg.NightHours[0]
 	end := m.cfg.NightHours[1]
 	if start > end {
@@ -285,15 +303,15 @@ func (m model) View() string {
 				style = style.Foreground(cursorFg).Background(cursorBg).Bold(true)
 			} else if utcH == nowUTCHour {
 				style = style.Foreground(nowMarker).Bold(true)
-				if m.isNight(localH) {
-					style = style.Background(nightBg)
-				} else if m.isWorkHoursUTC(utcH) {
+				if m.isWorkHoursUTC(utcH) {
 					style = style.Background(workBg)
+				} else if m.isNight(localH) {
+					style = style.Background(nightBg)
 				}
-			} else if m.isNight(localH) {
-				style = style.Foreground(dimFg).Background(nightBg)
 			} else if m.isWorkHoursUTC(utcH) {
 				style = style.Foreground(brightFg).Background(workBg)
+			} else if m.isNight(localH) {
+				style = style.Foreground(dimFg).Background(nightBg)
 			} else {
 				style = style.Foreground(lipgloss.Color("#AAAAAA"))
 			}
@@ -336,7 +354,7 @@ func (m model) View() string {
 		indicator := " "
 		if m.isWorkHoursUTC(m.cursorHour) {
 			indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#96CEB4")).Render("●")
-		} else if m.isNight(localH) {
+		} else if m.isNight(localH) && !m.isWorkHoursUTC(m.cursorHour) {
 			indicator = lipgloss.NewStyle().Foreground(dimFg).Render("◑")
 		}
 
@@ -354,14 +372,22 @@ func (m model) View() string {
 	b.WriteString(nowStr + "\n\n")
 
 	legend := lipgloss.NewStyle().Foreground(helpColor)
-	workLabel := fmt.Sprintf("● work hours (%d-%d", m.cfg.WorkHours[0], m.cfg.WorkHours[1])
-	if m.hasPrimary && len(m.zones) > 0 {
-		workLabel += " " + m.zones[0].name
+	var legendParts []string
+	if *m.cfg.ShowWorkHours {
+		workLabel := fmt.Sprintf("● work hours (%d-%d", m.cfg.WorkHours[0], m.cfg.WorkHours[1])
+		if m.hasPrimary && len(m.zones) > 0 {
+			workLabel += " " + m.zones[0].name
+		}
+		workLabel += ")"
+		legendParts = append(legendParts, workLabel)
 	}
-	workLabel += ")"
-	b.WriteString(legend.Render(fmt.Sprintf("  %s   ◑ night (%d:00-%d:00)",
-		workLabel,
-		m.cfg.NightHours[0], m.cfg.NightHours[1])) + "\n")
+	if *m.cfg.ShowNight {
+		legendParts = append(legendParts, fmt.Sprintf("◑ night (%d:00-%d:00)",
+			m.cfg.NightHours[0], m.cfg.NightHours[1]))
+	}
+	if len(legendParts) > 0 {
+		b.WriteString(legend.Render("  "+strings.Join(legendParts, "   ")) + "\n")
+	}
 
 	help := lipgloss.NewStyle().Foreground(helpColor).Italic(true)
 	b.WriteString(help.Render("  ←/→ slide time   n = now   q = quit") + "\n")
