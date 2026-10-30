@@ -13,8 +13,9 @@ import (
 )
 
 type zoneConfig struct {
-	Name string `yaml:"name"`
-	TZ   string `yaml:"tz"`
+	Name   string `yaml:"name"`
+	TZ     string `yaml:"tz"`
+	Use24h *bool  `yaml:"use_24h"`
 }
 
 type config struct {
@@ -23,7 +24,7 @@ type config struct {
 	NightHours    [2]int       `yaml:"night_hours"`
 	ShowWorkHours *bool        `yaml:"show_work_hours"`
 	ShowNight     *bool        `yaml:"show_night"`
-	Use24h        bool         `yaml:"use_24h"`
+	UTCAlways24h  *bool        `yaml:"utc_always_24h"`
 	Zones         []zoneConfig `yaml:"zones"`
 }
 
@@ -35,7 +36,7 @@ func defaultConfig() config {
 		NightHours:    [2]int{22, 6},
 		ShowWorkHours: boolPtr(true),
 		ShowNight:     boolPtr(true),
-		Use24h:        false,
+		UTCAlways24h:  boolPtr(true),
 		Zones: []zoneConfig{
 			{Name: "UTC", TZ: "UTC"},
 			{Name: "Eastern", TZ: "America/New_York"},
@@ -87,16 +88,51 @@ func loadConfig() config {
 		if cfg.ShowNight == nil {
 			cfg.ShowNight = boolPtr(true)
 		}
+		if cfg.UTCAlways24h == nil {
+			cfg.UTCAlways24h = boolPtr(true)
+		}
 		return cfg
 	}
 
 	return cfg
 }
 
+// localeUses24h returns the conventional time format for a timezone.
+// US zones use 12h; UTC and most of the world use 24h.
+func localeUses24h(tz string) bool {
+	if tz == "UTC" || strings.HasPrefix(tz, "Etc/") {
+		return true
+	}
+	// 12-hour countries: US, Canada, Australia, Philippines
+	twelveHourPrefixes := []string{
+		"America/New_York", "America/Chicago", "America/Denver",
+		"America/Los_Angeles", "America/Phoenix", "America/Anchorage",
+		"America/Adak", "America/Detroit", "America/Indiana",
+		"America/Kentucky", "America/Menominee", "America/Nome",
+		"America/North_Dakota", "America/Sitka", "America/Yakutat",
+		"America/Boise", "America/Juneau",
+		"Pacific/Honolulu", "Pacific/Guam", "Pacific/Pago_Pago",
+		"America/Toronto", "America/Vancouver", "America/Edmonton",
+		"America/Winnipeg", "America/Halifax", "America/St_Johns",
+		"America/Regina",
+		"Australia/",
+		"Asia/Manila",
+	}
+	for _, prefix := range twelveHourPrefixes {
+		if tz == prefix || strings.HasPrefix(tz, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
 type zone struct {
-	name     string
-	location *time.Location
-	offset   int
+	name       string
+	tz         string
+	location   *time.Location
+	offset     int
+	default24h bool // locale convention
+	config24h  *bool
 }
 
 func loadZones(cfg config) ([]zone, int, bool) {
@@ -112,7 +148,14 @@ func loadZones(cfg config) ([]zone, int, bool) {
 			continue
 		}
 		_, offset := time.Now().In(loc).Zone()
-		z := zone{name: zc.Name, location: loc, offset: offset / 3600}
+		z := zone{
+			name:       zc.Name,
+			tz:         zc.TZ,
+			location:   loc,
+			offset:     offset / 3600,
+			default24h: localeUses24h(zc.TZ),
+			config24h:  zc.Use24h,
+		}
 		if hasPrimary && strings.EqualFold(zc.Name, cfg.Primary) {
 			primary = &z
 			primaryOffset = z.offset
@@ -128,17 +171,44 @@ func loadZones(cfg config) ([]zone, int, bool) {
 	return zones, primaryOffset, hasPrimary
 }
 
+type timeFormatMode int
+
+const (
+	formatLocale timeFormatMode = iota // per-zone locale defaults
+	formatAll24h
+	formatAll12h
+)
+
 type tickMsg time.Time
 
 type model struct {
 	zones         []zone
 	cfg           config
-	primaryOffset int // UTC offset of the primary zone (for work-hour anchoring)
+	primaryOffset int
 	hasPrimary    bool
 	width         int
 	height        int
 	now           time.Time
 	cursorHour    int
+	formatMode    timeFormatMode
+}
+
+func (m model) shouldUse24h(z zone) bool {
+	// UTC override takes priority
+	if *m.cfg.UTCAlways24h && (z.tz == "UTC" || strings.HasPrefix(z.tz, "Etc/")) {
+		return true
+	}
+	switch m.formatMode {
+	case formatAll24h:
+		return true
+	case formatAll12h:
+		return false
+	default:
+		if z.config24h != nil {
+			return *z.config24h
+		}
+		return z.default24h
+	}
 }
 
 func tickEvery() tea.Cmd {
@@ -163,6 +233,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursorHour = (m.cursorHour + 1) % 24
 		case "n":
 			m.cursorHour = m.now.UTC().Hour()
+		case "t":
+			m.formatMode = (m.formatMode + 1) % 3
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -200,6 +272,38 @@ func (m model) isNight(hour int) bool {
 		return hour >= start || hour < end
 	}
 	return hour >= start && hour < end
+}
+
+// formatHourCell formats an hour for the bar graph (compact, fits in 4 chars).
+func formatHourCell(hour int, use24h bool) string {
+	if use24h {
+		return fmt.Sprintf("%02d", hour)
+	}
+	display := hour % 12
+	if display == 0 {
+		display = 12
+	}
+	suffix := "a"
+	if hour >= 12 {
+		suffix = "p"
+	}
+	return fmt.Sprintf("%d%s", display, suffix)
+}
+
+// formatHourFull formats an hour for the selected-time readout.
+func formatHourFull(hour int, use24h bool) string {
+	if use24h {
+		return fmt.Sprintf("%02d:00", hour)
+	}
+	display := hour % 12
+	if display == 0 {
+		display = 12
+	}
+	period := "am"
+	if hour >= 12 {
+		period = "pm"
+	}
+	return fmt.Sprintf("%d:00 %s", display, period)
 }
 
 var (
@@ -254,6 +358,7 @@ func (m model) View() string {
 
 	nowUTCHour := m.now.UTC().Hour()
 
+	// Header row — always 24h (it's the UTC reference axis)
 	headerLabel := lipgloss.NewStyle().
 		Width(labelWidth).
 		Foreground(dimFg).
@@ -285,6 +390,7 @@ func (m model) View() string {
 
 	for zi, z := range m.zones {
 		color := zoneColors[zi%len(zoneColors)]
+		use24h := m.shouldUse24h(z)
 
 		label := lipgloss.NewStyle().
 			Width(labelWidth).
@@ -316,7 +422,7 @@ func (m model) View() string {
 				style = style.Foreground(lipgloss.Color("#AAAAAA"))
 			}
 
-			b.WriteString(style.Render(fmt.Sprintf("%02d", localH)))
+			b.WriteString(style.Render(formatHourCell(localH, use24h)))
 		}
 		b.WriteString("\n")
 	}
@@ -332,29 +438,17 @@ func (m model) View() string {
 	for zi, z := range m.zones {
 		color := zoneColors[zi%len(zoneColors)]
 		localH := hourInZone(m.cursorHour, z.offset)
+		use24h := m.shouldUse24h(z)
 
 		nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Width(labelWidth)
 		timeStyle := lipgloss.NewStyle().Foreground(brightFg)
 
-		var timeStr string
-		if m.cfg.Use24h {
-			timeStr = fmt.Sprintf("%02d:00", localH)
-		} else {
-			period := "am"
-			if localH >= 12 {
-				period = "pm"
-			}
-			display12 := localH % 12
-			if display12 == 0 {
-				display12 = 12
-			}
-			timeStr = fmt.Sprintf("%2d:00 %s", display12, period)
-		}
+		timeStr := formatHourFull(localH, use24h)
 
 		indicator := " "
 		if m.isWorkHoursUTC(m.cursorHour) {
 			indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#96CEB4")).Render("●")
-		} else if m.isNight(localH) && !m.isWorkHoursUTC(m.cursorHour) {
+		} else if m.isNight(localH) {
 			indicator = lipgloss.NewStyle().Foreground(dimFg).Render("◑")
 		}
 
@@ -389,8 +483,16 @@ func (m model) View() string {
 		b.WriteString(legend.Render("  "+strings.Join(legendParts, "   ")) + "\n")
 	}
 
+	formatLabel := "locale"
+	switch m.formatMode {
+	case formatAll24h:
+		formatLabel = "24h"
+	case formatAll12h:
+		formatLabel = "12h"
+	}
+
 	help := lipgloss.NewStyle().Foreground(helpColor).Italic(true)
-	b.WriteString(help.Render("  ←/→ slide time   n = now   q = quit") + "\n")
+	b.WriteString(help.Render(fmt.Sprintf("  ←/→ slide time   n = now   t = format [%s]   q = quit", formatLabel)) + "\n")
 
 	return b.String()
 }
@@ -407,6 +509,7 @@ func main() {
 		hasPrimary:    hasPrimary,
 		now:           now,
 		cursorHour:    now.UTC().Hour(),
+		formatMode:    formatLocale,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())

@@ -28,11 +28,14 @@ work_hours: [9, 17]
 # Format: [start, end] in 24-hour time — wraps past midnight
 night_hours: [22, 6]
 
-# Use 24-hour time format in the "Selected" readout
-use_24h: false
+# Keep UTC in 24-hour format even when toggling to 12h (default: true)
+utc_always_24h: true
 
 # Time zones to display
-# Each entry needs a display name and an IANA timezone identifier
+# Each entry needs a display name and an IANA timezone identifier.
+# By default, each zone uses its locale convention (US zones → 12h, most others → 24h).
+# Override per-zone with use_24h: true/false. Press 't' at runtime to cycle through
+# locale defaults → all 24h → all 12h.
 # See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 zones:
   - name: UTC
@@ -51,3 +54,7 @@ zones:
     tz: America/Anchorage
   - name: Hawaii
     tz: Pacific/Honolulu
+  # Per-zone override example:
+  # - name: Tokyo
+  #   tz: Asia/Tokyo
+  #   use_24h: true
