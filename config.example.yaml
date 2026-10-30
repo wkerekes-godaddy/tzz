@@ -1,0 +1,40 @@
+# TZZ — Time Zone Zen
+# Optional configuration file
+#
+# Place this file at one of:
+#   ~/.config/tzz/config.yaml
+#   ~/.tzz.yaml
+#
+# All settings are optional. Omitted values use the defaults shown below.
+
+# Work hours (highlighted green in the bar graph)
+# Format: [start, end] in 24-hour time
+work_hours: [9, 17]
+
+# Night hours (dimmed in the bar graph)
+# Format: [start, end] in 24-hour time — wraps past midnight
+night_hours: [22, 6]
+
+# Use 24-hour time format in the "Selected" readout
+use_24h: false
+
+# Time zones to display
+# Each entry needs a display name and an IANA timezone identifier
+# See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+zones:
+  - name: UTC
+    tz: UTC
+  - name: Eastern
+    tz: America/New_York
+  - name: Central
+    tz: America/Chicago
+  - name: Mountain
+    tz: America/Denver
+  - name: Arizona
+    tz: America/Phoenix
+  - name: Pacific
+    tz: America/Los_Angeles
+  - name: Alaska
+    tz: America/Anchorage
+  - name: Hawaii
+    tz: Pacific/Honolulu
