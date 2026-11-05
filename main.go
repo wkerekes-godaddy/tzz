@@ -191,6 +191,7 @@ type model struct {
 	now           time.Time
 	cursorHour    int
 	formatMode    timeFormatMode
+	selectedZone  int
 }
 
 func (m model) shouldUse24h(z zone) bool {
@@ -231,6 +232,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursorHour = (m.cursorHour - 1 + 24) % 24
 		case "right", "l":
 			m.cursorHour = (m.cursorHour + 1) % 24
+		case "up", "k":
+			m.selectedZone = (m.selectedZone - 1 + len(m.zones)) % len(m.zones)
+		case "down", "j":
+			m.selectedZone = (m.selectedZone + 1) % len(m.zones)
 		case "n":
 			m.cursorHour = m.now.UTC().Hour()
 		case "t":
@@ -358,15 +363,20 @@ func (m model) View() string {
 
 	nowUTCHour := m.now.UTC().Hour()
 
-	// Header row — always 24h (it's the UTC reference axis)
+	selZ := m.zones[m.selectedZone]
+	selColor := zoneColors[m.selectedZone%len(zoneColors)]
+	selUse24h := m.shouldUse24h(selZ)
+
 	headerLabel := lipgloss.NewStyle().
 		Width(labelWidth).
-		Foreground(dimFg).
-		Render("")
+		Foreground(selColor).
+		Bold(true).
+		Render("▸ " + selZ.name)
 	b.WriteString("  " + headerLabel)
 
 	for i := 0; i < maxHours; i++ {
 		utcH := (startUTC + i) % 24
+		localH := hourInZone(utcH, selZ.offset)
 		style := lipgloss.NewStyle().Width(cellWidth).Align(lipgloss.Center)
 		if utcH == m.cursorHour {
 			style = style.Foreground(cursorFg).Background(cursorBg).Bold(true)
@@ -380,7 +390,7 @@ func (m model) View() string {
 		} else {
 			style = style.Foreground(dimFg)
 		}
-		b.WriteString(style.Render(fmt.Sprintf("%02d", utcH)))
+		b.WriteString(style.Render(formatHourCell(localH, selUse24h)))
 	}
 	b.WriteString("\n")
 
@@ -392,12 +402,17 @@ func (m model) View() string {
 		color := zoneColors[zi%len(zoneColors)]
 		use24h := m.shouldUse24h(z)
 
+		prefix := "  "
+		if zi == m.selectedZone {
+			prefix = lipgloss.NewStyle().Foreground(color).Render(" ▸")
+		}
+
 		label := lipgloss.NewStyle().
 			Width(labelWidth).
 			Foreground(color).
 			Bold(true).
 			Render(z.name)
-		b.WriteString("  " + label)
+		b.WriteString(prefix + label)
 
 		for i := 0; i < maxHours; i++ {
 			utcH := (startUTC + i) % 24
@@ -492,7 +507,7 @@ func (m model) View() string {
 	}
 
 	help := lipgloss.NewStyle().Foreground(helpColor).Italic(true)
-	b.WriteString(help.Render(fmt.Sprintf("  ←/→ slide time   n = now   t = format [%s]   q = quit", formatLabel)) + "\n")
+	b.WriteString(help.Render(fmt.Sprintf("  ←/→ slide time   ↑/↓ select zone   n = now   t = format [%s]   q = quit", formatLabel)) + "\n")
 
 	return b.String()
 }
